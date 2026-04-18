@@ -1,4 +1,4 @@
-# MilestonePay# MilestonePay
+# MilestonePay
 
 > Anti-ghosting milestone escrow for freelancers — get paid automatically, even if the client disappears.
 
