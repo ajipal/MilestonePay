@@ -3,7 +3,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     token, symbol_short,
-    Address, Env, Symbol,
+    Address, Env,
 };
 
 // ─── STORAGE KEYS ─────────────────────────────────────────────────────────────
@@ -188,6 +188,56 @@ impl MilestonePayContract {
 
         env.events().publish(
             (symbol_short!("released"), project_id),
+            milestone.amount,
+        );
+    }
+
+    // ── CONFIRM DELIVERY ────────────────────────────────────────────────────
+    // Called by the client to approve the freelancer's work.
+    // Releases funds immediately without waiting for the deadline.
+    // This is the happy path for honest clients who want to review and pay.
+    //
+    // Three possible client actions after mark_complete():
+    //   1. confirm_delivery() → immediate release (client approves)
+    //   2. raise_dispute()    → funds frozen (client has issues)
+    //   3. do nothing         → deadline passes, freelancer calls claim_payment()
+    pub fn confirm_delivery(env: Env, project_id: u64, client: Address) {
+        client.require_auth();
+
+        let mut milestone: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(project_id))
+            .expect("milestone not found");
+
+        // Only the registered client can confirm delivery
+        if milestone.client != client {
+            panic!("caller is not the registered client");
+        }
+        if !milestone.completed {
+            panic!("freelancer has not marked this milestone complete yet");
+        }
+        if milestone.released {
+            panic!("funds already released");
+        }
+        if milestone.disputed {
+            panic!("dispute active — resolve dispute first");
+        }
+
+        // Release USDC immediately to freelancer — no need to wait for deadline
+        let token_client = token::Client::new(&env, &milestone.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &milestone.freelancer,
+            &milestone.amount,
+        );
+
+        milestone.released = true;
+        env.storage().persistent().set(&DataKey::Milestone(project_id), &milestone);
+
+        // Emit event so frontend can update state instantly
+        env.events().publish(
+            (symbol_short!("approved"), project_id),
             milestone.amount,
         );
     }

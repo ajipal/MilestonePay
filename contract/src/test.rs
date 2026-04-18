@@ -7,7 +7,7 @@ mod tests {
     use crate::{MilestonePayContract, MilestonePayContractClient};
 
     // ── HELPER: deploy a mock USDC token and mint to an address ───────────
-    fn create_token(env: &Env, admin: &Address) -> (Address, token::StellarAssetClient<'_>) {
+    fn create_token<'a>(env: &'a Env, admin: &'a Address) -> (Address, token::StellarAssetClient<'a>) {
         let token_id = env.register_stellar_asset_contract_v2(admin.clone());
         let token_admin_client = token::StellarAssetClient::new(env, &token_id.address());
         (token_id.address(), token_admin_client)
@@ -23,33 +23,28 @@ mod tests {
 
     // ════════════════════════════════════════════════════════════════════════
     // TEST 1 — HAPPY PATH
-    // Full end-to-end flow:
-    //   create_milestone → mark_complete → (time passes) → claim_payment
-    // Asserts that USDC is transferred to the freelancer after deadline.
+    // Client reviews and approves work via confirm_delivery().
+    // Funds release immediately — no need to wait for deadline.
     // ════════════════════════════════════════════════════════════════════════
     #[test]
-    fn test_happy_path_full_flow() {
+    fn test_happy_path_client_confirms_delivery() {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin      = Address::generate(&env);
+        let admin       = Address::generate(&env);
         let client_addr = Address::generate(&env);
-        let freelancer = Address::generate(&env);
+        let freelancer  = Address::generate(&env);
 
-        // Deploy token and mint $100 USDC (6 decimals → 100_000_000 units) to client
         let (token_id, token_admin) = create_token(&env, &admin);
         token_admin.mint(&client_addr, &100_000_000);
 
-        // Deploy contract
         let contract = deploy_contract(&env, &admin);
 
-        // Set ledger timestamp to T=1000
         env.ledger().with_mut(|l| l.timestamp = 1000);
 
-        // Deadline is T=1010 (10 seconds from now — demo mode)
         let project_id: u64 = 1;
-        let amount: i128 = 50_000_000; // $50 USDC
-        let deadline: u64 = 1010;
+        let amount: i128    = 50_000_000; // $50 USDC
+        let deadline: u64   = 9999;       // far future — client won't ghost
 
         // Client locks $50 USDC
         contract.create_milestone(
@@ -61,24 +56,23 @@ mod tests {
             &deadline,
         );
 
-        // Freelancer marks milestone complete
+        // Freelancer marks milestone done
         contract.mark_complete(&project_id, &freelancer);
 
-        // Advance time past deadline
-        env.ledger().with_mut(|l| l.timestamp = 1020);
-
-        // Freelancer claims payment
-        contract.claim_payment(&project_id, &freelancer);
+        // Client reviews work and approves — releases immediately
+        contract.confirm_delivery(&project_id, &client_addr);
 
         // Assert freelancer received $50 USDC
         let token_client = token::Client::new(&env, &token_id);
-        let freelancer_balance = token_client.balance(&freelancer);
-        assert_eq!(freelancer_balance, 50_000_000, "freelancer should have received $50 USDC");
+        assert_eq!(
+            token_client.balance(&freelancer),
+            50_000_000,
+            "freelancer should have received $50 USDC after client approval"
+        );
 
-        // Assert milestone state is released
+        // Assert milestone is released
         let milestone = contract.get_milestone(&project_id);
-        assert!(milestone.released, "milestone should be marked released");
-        assert!(milestone.completed, "milestone should be marked completed");
+        assert!(milestone.released, "milestone should be released after confirm_delivery");
     }
 
     // ════════════════════════════════════════════════════════════════════════
