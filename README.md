@@ -219,6 +219,9 @@ soroban contract invoke \
 
 ---
 
+##Contract
+<img width="1736" height="837" alt="image" src="https://github.com/user-attachments/assets/8604863b-a759-42e3-b45f-76a5f927c9e8" />
+
 ## License
 
 MIT License
