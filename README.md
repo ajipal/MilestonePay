@@ -219,8 +219,10 @@ soroban contract invoke \
 
 ---
 
-##Contract
+### Contract
 <img width="1736" height="837" alt="image" src="https://github.com/user-attachments/assets/8604863b-a759-42e3-b45f-76a5f927c9e8" />
+
+link: https://stellar.expert/explorer/testnet/contract/CCLHJUBRSTYXCTV65WQ727ZO4V5XAM3A6JUCUDNVL2Z3KCO35W5ICVTV
 
 ## License
 
