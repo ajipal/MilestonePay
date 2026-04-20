@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import type { PageName, MsStatus, BuildMs, MilestoneData, Project, User, TimelineEntry } from '@/lib/types';
+import type { PageName, UserRole, MsStatus, BuildMs, MilestoneData, Project, TimelineEntry } from '@/lib/types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const DL_LABEL: Record<number, string> = {
-  172800: '48 hours', 86400: '24 hours', 259200: '72 hours', 10: '10 seconds (demo)',
+  172800: '48 hours', 86400: '24 hours', 259200: '72 hours',
 };
 const STATUS_ICON: Record<MsStatus, string> = {
   created: '📋', progress: '⚙️', review: '⏳', revision: '🔁', released: '✅', disputed: '⚠️',
@@ -18,52 +18,47 @@ const STATUS_SC: Record<MsStatus, string> = {
   created: 's-created', progress: 's-progress', review: 's-review',
   revision: 's-review', released: 's-released', disputed: 's-disputed',
 };
-const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID ?? '';
-const IS_DEMO = !CONTRACT_ID;
+const DEFAULT_BUILD: BuildMs[] = [
+  { id: 1, title: 'Initial Wireframes', desc: 'Lo-fi wireframes and user flow', amount: 50 },
+  { id: 2, title: 'Final Deliverables', desc: 'Finished design files ready for dev', amount: 50 },
+];
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 const short = (addr: string, f = 6, b = 4) =>
   !addr || addr.length <= f + b + 3 ? addr || '—' : `${addr.slice(0, f)}...${addr.slice(-b)}`;
 const fmt = (s: number) =>
   [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map(n => String(n).padStart(2, '0')).join(':');
-const randTx = () => `a${Math.random().toString(36).slice(2, 10)}...${Math.random().toString(36).slice(2, 6)}`;
 const nowStr = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-let projUID = 0;
 let buildUID = 2;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function App() {
-  // ── App state ──
-  const [page, setPage] = useState<PageName>('login');
-  const [user, setUser] = useState<User>({ name: '', email: '', wallet: '', balance: 1200 });
+  // ── Auth state ──
+  const [page, setPage] = useState<PageName>('connect');
+  const [wallet, setWallet] = useState('');
+  const [role, setRole] = useState<UserRole | null>(null);
+
+  // ── Data state ──
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [activeMilestoneId, setActiveMilestoneId] = useState<number | null>(null);
-  const [walletConnected, setWalletConnected] = useState(false);
-  const [obVisible, setObVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // ── Login form ──
-  const [loginName, setLoginName] = useState('');
-  const [loginEmail, setLoginEmail] = useState('');
 
   // ── Create form ──
   const [formName, setFormName] = useState('');
-  const [formClientWallet, setFormClientWallet] = useState('');
   const [formFreelancerWallet, setFormFreelancerWallet] = useState('');
   const [formDeadline, setFormDeadline] = useState(172800);
-  const [buildList, setBuildList] = useState<BuildMs[]>([
-    { id: 1, title: 'Initial Wireframes', desc: 'Lo-fi wireframes and user flow', amount: 50 },
-    { id: 2, title: 'Final Deliverables', desc: 'Finished design files ready for dev', amount: 50 },
-  ]);
+  const [buildList, setBuildList] = useState<BuildMs[]>(DEFAULT_BUILD);
 
   // ── Modal state ──
   const [modalSubmit, setModalSubmit] = useState(false);
   const [modalRevision, setModalRevision] = useState(false);
   const [modalDispute, setModalDispute] = useState(false);
   const [proofLink, setProofLink] = useState('');
-  const [proofFileAttached, setProofFileAttached] = useState(false);
+  const [proofFileUrl, setProofFileUrl] = useState('');
+  const [proofFileName, setProofFileName] = useState('');
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [revFeedback, setRevFeedback] = useState('');
   const [revFeePercent, setRevFeePercent] = useState(20);
 
@@ -74,8 +69,37 @@ export default function App() {
   // ── Derived ──
   const activeProject = projects.find(p => p.id === activeProjectId) ?? null;
   const activeMilestone = activeProject?.milestones.find(m => m.id === activeMilestoneId) ?? null;
+  const isProjectClient = activeProject?.clientWallet === wallet;
+  const isProjectFreelancer = activeProject?.freelancerWallet === wallet;
 
-  // ── Global countdown timer ──────────────────────────────────────────────────
+  // ── Auto-connect on mount (if Freighter was previously authorized) ──────────
+  useEffect(() => {
+    async function checkExisting() {
+      try {
+        const { getWalletAddress } = await import('@/lib/wallet');
+        const addr = await getWalletAddress();
+        if (!addr) return;
+        setWallet(addr);
+        const { getUserRole } = await import('@/lib/db');
+        const r = await getUserRole(addr);
+        if (r) { setRole(r); setPage('dashboard'); }
+        else setPage('role');
+      } catch { /* stay on connect page */ }
+    }
+    checkExisting();
+  }, []);
+
+  // ── Load projects when wallet + role are set ─────────────────────────────
+  useEffect(() => {
+    if (!wallet || !role) return;
+    import('@/lib/db').then(({ loadProjects }) =>
+      loadProjects(wallet, role)
+        .then(setProjects)
+        .catch((e: Error) => showToast(e.message, '⚠'))
+    );
+  }, [wallet, role]);
+
+  // ── Countdown timer ───────────────────────────────────────────────────────
   useEffect(() => {
     const interval = setInterval(() => {
       setProjects(prev => {
@@ -92,18 +116,16 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Toast helper ─────────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────
   const showToast = (msg: string, icon = '✅') => {
     setToast({ show: true, msg, icon });
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(t => ({ ...t, show: false })), 3200);
   };
 
-  // ── Navigation ───────────────────────────────────────────────────────────────
   const go = (p: PageName) => { setPage(p); window.scrollTo(0, 0); };
 
-  // ── Milestone updater helper ─────────────────────────────────────────────────
-  const updateMilestone = (patch: Partial<MilestoneData>) => {
+  const updateMilestoneLocal = (patch: Partial<MilestoneData>) => {
     if (activeProjectId === null || activeMilestoneId === null) return;
     setProjects(prev => prev.map(p =>
       p.id !== activeProjectId ? p : {
@@ -113,7 +135,7 @@ export default function App() {
     ));
   };
 
-  const addTimeline = (text: string, dot: TimelineEntry['dot']) => {
+  const addTimelineLocal = (text: string, dot: TimelineEntry['dot']) => {
     if (activeProjectId === null) return;
     setProjects(prev => prev.map(p =>
       p.id !== activeProjectId ? p : {
@@ -123,26 +145,45 @@ export default function App() {
     ));
   };
 
-  // ── Login ────────────────────────────────────────────────────────────────────
-  function connectWallet() {
-    const next = !walletConnected;
-    setWalletConnected(next);
-    if (next) showToast('Freighter wallet connected', '👛');
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  async function doConnect() {
+    setLoading(true);
+    try {
+      const { connectWallet, validateWallet } = await import('@/lib/wallet');
+      const addr = await connectWallet();
+
+      const valid = await validateWallet(addr);
+      if (!valid) throw new Error('Account not found on Stellar Testnet. Fund it at laboratory.stellar.org first.');
+
+      setWallet(addr);
+      const { getUserRole } = await import('@/lib/db');
+      const existingRole = await getUserRole(addr);
+      if (existingRole) { setRole(existingRole); go('dashboard'); }
+      else go('role');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  async function doLogin() {
-    if (!loginName.trim()) return showToast('Please enter your name', '⚠');
-    setUser(u => ({
-      ...u,
-      name: loginName.trim(),
-      email: loginEmail.trim(),
-      wallet: walletConnected ? 'GD7X4KQWP2N8CJRYMXL3HFTQ9K9QR' : 'GD7X...DEMO',
-    }));
-    go('dashboard');
-    setTimeout(() => { setObVisible(true); setTimeout(() => setObVisible(false), 6000); }, 2000);
+  async function selectRole(r: UserRole) {
+    setLoading(true);
+    try {
+      const { saveUserRole } = await import('@/lib/db');
+      await saveUserRole(wallet, r);
+      setRole(r);
+      go('dashboard');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  // ── Create project ───────────────────────────────────────────────────────────
+  // ── Create project ────────────────────────────────────────────────────────
+  const buildTotal = buildList.reduce((s, m) => s + m.amount, 0);
+
   function addBuildMs() {
     buildUID++;
     setBuildList(prev => [...prev, { id: buildUID, title: '', desc: '', amount: 50 }]);
@@ -151,53 +192,48 @@ export default function App() {
     if (buildList.length <= 1) return;
     setBuildList(prev => prev.filter(m => m.id !== id));
   }
-  const buildTotal = buildList.reduce((s, m) => s + m.amount, 0);
 
   async function lockProject() {
-    if (!formName.trim()) return showToast('Please enter a project name', '⚠');
+    if (!formName.trim()) return showToast('Enter a project name', '⚠');
     if (!formFreelancerWallet.trim()) return showToast("Enter the freelancer's wallet address", '⚠');
+    if (buildList.some(m => !m.title.trim())) return showToast('All milestones need a title', '⚠');
     if (buildList.some(m => m.amount <= 0)) return showToast('All milestone amounts must be > 0', '⚠');
+    if (!process.env.NEXT_PUBLIC_CONTRACT_ID) return showToast('Contract not configured — set NEXT_PUBLIC_CONTRACT_ID in .env.local', '⚠');
 
     setLoading(true);
     try {
-      if (!IS_DEMO) {
-        const { createMilestone } = await import('@/lib/contract');
-        const { signTx } = await import('@/lib/wallet');
-        await createMilestone(
-          user.wallet, Date.now(), formFreelancerWallet,
-          process.env.NEXT_PUBLIC_USDC_TOKEN ?? '',
-          buildTotal, Math.floor(Date.now() / 1000) + formDeadline, signTx,
-        );
-      }
-      projUID++;
-      const pid = projUID;
-      const ms: MilestoneData[] = buildList.map((m, i) => ({
-        id: i, projId: pid,
-        name: m.title || `Milestone ${i + 1}`, desc: m.desc, amount: m.amount,
-        status: 'created', timerSecs: 0, timerMax: formDeadline,
-        proofLink: '', revFee: 0, revFeedback: '',
-      }));
-      const proj: Project = {
-        id: pid, name: formName.trim(),
-        clientWallet: formClientWallet.trim() || user.wallet,
-        freelancerWallet: formFreelancerWallet.trim(),
-        deadline: formDeadline, tx: randTx(),
-        milestones: ms,
-        timeline: [{
-          dot: 'done', time: nowStr(),
-          text: `<strong>$${buildTotal} USDC locked</strong> — contract initialized with ${ms.length} milestone${ms.length > 1 ? 's' : ''}`,
-        }],
-      };
-      setProjects(prev => [...prev, proj]);
-      setUser(u => ({ ...u, balance: u.balance - buildTotal }));
+      const { createProject, updateProjectTx, addTimeline: dbTimeline, loadProjects } = await import('@/lib/db');
+      const { createMilestone } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+
+      // 1. Create in DB first (get IDs)
+      const pid = await createProject(
+        formName.trim(), wallet, formFreelancerWallet.trim(), formDeadline,
+        buildList.map(m => ({ name: m.title || `Milestone ${m.id}`, desc: m.desc, amount: m.amount }))
+      );
+
+      // 2. Lock on-chain
+      const txHash = await createMilestone(
+        wallet, pid, formFreelancerWallet.trim(),
+        process.env.NEXT_PUBLIC_USDC_TOKEN ?? '',
+        buildTotal,
+        Math.floor(Date.now() / 1000) + formDeadline,
+        signTx,
+      );
+
+      // 3. Persist tx hash + timeline
+      await updateProjectTx(pid, txHash);
+      await dbTimeline(pid, 'done', `<strong>$${buildTotal} USDC locked</strong> — ${buildList.length} milestone${buildList.length > 1 ? 's' : ''} initialized. TX: ${txHash.slice(0, 12)}...`);
+
+      // 4. Reload & navigate
+      const updated = await loadProjects(wallet, role!);
+      setProjects(updated);
       setActiveProjectId(pid);
-      // Reset form
-      setFormName(''); setFormClientWallet(''); setFormFreelancerWallet(''); setFormDeadline(172800);
-      setBuildList([
-        { id: 1, title: 'Initial Wireframes', desc: 'Lo-fi wireframes and user flow', amount: 50 },
-        { id: 2, title: 'Final Deliverables', desc: 'Finished design files ready for dev', amount: 50 },
-      ]);
-      buildUID = 2;
+
+      // 5. Reset form
+      setFormName(''); setFormFreelancerWallet(''); setFormDeadline(172800);
+      setBuildList([...DEFAULT_BUILD]); buildUID = 2;
+
       showToast(`<strong>$${buildTotal} USDC locked</strong> — project created!`, '🔒');
       setTimeout(() => go('project'), 1400);
     } catch (e: unknown) {
@@ -207,129 +243,246 @@ export default function App() {
     }
   }
 
-  // ── Milestone actions ────────────────────────────────────────────────────────
+  // ── Milestone actions ─────────────────────────────────────────────────────
   function openProject(id: number) { setActiveProjectId(id); go('project'); }
   function openMilestone(msId: number) { setActiveMilestoneId(msId); go('milestone'); }
 
-  function freelancerStartWork() {
-    updateMilestone({ status: 'progress' });
-    addTimeline(`<strong>Work started</strong> on "${activeMilestone?.name}" — milestone is in progress.`, 'done');
-    showToast(`${activeMilestone?.name} — freelancer started work`, '⚙️');
+  async function freelancerStartWork() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p) return;
+    updateMilestoneLocal({ status: 'progress' });
+    addTimelineLocal(`<strong>Work started</strong> on "${m.name}"`, 'done');
+    showToast(`${m.name} — work started`, '⚙️');
+    try {
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'progress' });
+      await addTimeline(p.id, 'done', `<strong>Work started</strong> on "${m.name}"`);
+    } catch { showToast('Sync failed — refresh to reload', '⚠'); }
   }
 
-  function confirmSubmit() {
-    const link = proofLink || '(file attached)';
-    updateMilestone({ status: 'review', proofLink: link, timerSecs: activeMilestone?.timerMax ?? formDeadline });
-    addTimeline(`<strong>Milestone submitted</strong> — "${activeMilestone?.name}" delivered. Review window opened. Proof: ${link}`, 'done');
-    setModalSubmit(false);
-    setProofLink(''); setProofFileAttached(false);
-    showToast(`<strong>${activeMilestone?.name} submitted</strong> — client review window started`, '📤');
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !activeMilestoneId) return;
+    setUploadingFile(true);
+    try {
+      const { uploadProofFile } = await import('@/lib/db');
+      const url = await uploadProofFile(file, activeMilestoneId);
+      setProofFileUrl(url);
+      setProofFileName(file.name);
+      showToast('File uploaded', '📎');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setUploadingFile(false);
+    }
   }
 
-  function approveMs() {
-    const amt = activeMilestone?.amount ?? 0;
-    updateMilestone({ status: 'released' });
-    setUser(u => ({ ...u, balance: u.balance + amt }));
-    addTimeline(`<strong>$${amt} USDC released</strong> — client approved "${activeMilestone?.name}" via confirm_delivery(). Instant release.`, 'done');
-    showToast(`Client approved — $${amt} USDC released instantly`, '✅');
+  async function confirmSubmit() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p) return;
+    const expiresAt = new Date(Date.now() + m.timerMax * 1000).toISOString();
+    const link = proofLink || proofFileUrl || '';
+    setLoading(true);
+    try {
+      const { markComplete } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await markComplete(wallet, p.id, signTx);
+
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'review', review_expires_at: expiresAt, proof_link: proofLink, proof_file_url: proofFileUrl });
+      await addTimeline(p.id, 'done', `<strong>Milestone submitted</strong> — "${m.name}". Proof: ${link || 'No link'}`);
+
+      updateMilestoneLocal({ status: 'review', proofLink, proofFileUrl, timerSecs: m.timerMax });
+      addTimelineLocal(`<strong>Milestone submitted</strong> — "${m.name}". Proof: ${link || 'No link'}`, 'done');
+      setModalSubmit(false);
+      setProofLink(''); setProofFileUrl(''); setProofFileName('');
+      showToast(`<strong>${m.name} submitted</strong> — client review window started`, '📤');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function claimMs() {
-    if ((activeMilestone?.timerSecs ?? 1) > 0) return;
-    const amt = activeMilestone?.amount ?? 0;
-    updateMilestone({ status: 'released' });
-    addTimeline(`<strong>$${amt} USDC auto-released</strong> — deadline passed, claim_payment() executed for "${activeMilestone?.name}".`, 'done');
-    showToast(`$${amt} USDC released — auto-release after deadline`, '💸');
+  async function approveMs() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p) return;
+    setLoading(true);
+    try {
+      const { confirmDelivery } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await confirmDelivery(wallet, p.id, signTx);
+
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'released' });
+      await addTimeline(p.id, 'done', `<strong>$${m.amount} USDC released</strong> — client approved "${m.name}"`);
+
+      updateMilestoneLocal({ status: 'released' });
+      addTimelineLocal(`<strong>$${m.amount} USDC released</strong> — client approved "${m.name}"`, 'done');
+      showToast(`$${m.amount} USDC released to freelancer`, '✅');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function confirmRevision() {
-    const m = activeMilestone;
-    if (!m) return;
+  async function claimMs() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p || m.timerSecs > 0) return;
+    setLoading(true);
+    try {
+      const { claimPayment } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await claimPayment(wallet, p.id, signTx);
+
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'released' });
+      await addTimeline(p.id, 'done', `<strong>$${m.amount} USDC auto-released</strong> — deadline passed, claimed by freelancer`);
+
+      updateMilestoneLocal({ status: 'released' });
+      addTimelineLocal(`<strong>$${m.amount} USDC auto-released</strong> — claimed after deadline`, 'done');
+      showToast(`$${m.amount} USDC claimed — auto-release`, '💸');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmRevision() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p) return;
     const feePaid = parseFloat((m.amount * revFeePercent / 100).toFixed(2));
-    updateMilestone({ status: 'revision', revFee: revFeePercent, revFeedback: revFeedback || 'Client requested changes.', timerSecs: 0 });
-    setUser(u => ({ ...u, balance: u.balance - feePaid }));
-    addTimeline(`<strong>Revision requested</strong> on "${m.name}" — fee of $${feePaid} USDC paid. Feedback: ${revFeedback || 'Changes requested.'}`, 'act');
-    setModalRevision(false);
-    setRevFeedback(''); setRevFeePercent(20);
-    showToast(`Revision requested — $${feePaid} USDC fee paid`, '🔁');
+    setLoading(true);
+    try {
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'revision', rev_fee: revFeePercent, rev_feedback: revFeedback || 'Client requested changes.', review_expires_at: null });
+      await addTimeline(p.id, 'act', `<strong>Revision requested</strong> on "${m.name}" — $${feePaid} fee. ${revFeedback || 'Changes requested.'}`);
+
+      updateMilestoneLocal({ status: 'revision', revFee: revFeePercent, revFeedback: revFeedback || 'Client requested changes.', timerSecs: 0 });
+      addTimelineLocal(`<strong>Revision requested</strong> on "${m.name}" — $${feePaid} fee`, 'act');
+      showToast(`Revision requested — $${feePaid} USDC fee`, '🔁');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setModalRevision(false); setRevFeedback(''); setRevFeePercent(20);
+      setLoading(false);
+    }
   }
 
-  function confirmDispute() {
-    const m = activeMilestone;
-    if (!m) return;
-    updateMilestone({ status: 'disputed', timerSecs: 0 });
-    addTimeline(`<strong>Dispute raised</strong> on "${m.name}" — funds frozen, raise_dispute() called. Admin notified.`, 'act');
-    setModalDispute(false);
-    showToast('Dispute raised on-chain — funds frozen, admin notified', '⚠');
+  async function confirmDispute() {
+    const m = activeMilestone; const p = activeProject;
+    if (!m || !p) return;
+    setLoading(true);
+    try {
+      const { raiseDispute } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await raiseDispute(wallet, p.id, signTx);
+
+      const { updateMsStatus, addTimeline } = await import('@/lib/db');
+      await updateMsStatus(m.id, { status: 'disputed', review_expires_at: null });
+      await addTimeline(p.id, 'act', `<strong>Dispute raised</strong> on "${m.name}" — funds frozen. Admin notified.`);
+
+      updateMilestoneLocal({ status: 'disputed', timerSecs: 0 });
+      addTimelineLocal(`<strong>Dispute raised</strong> on "${m.name}" — funds frozen`, 'act');
+      showToast('Dispute raised on-chain — funds frozen', '⚠');
+    } catch (e: unknown) {
+      showToast((e as Error).message, '⚠');
+    } finally {
+      setModalDispute(false); setLoading(false);
+    }
   }
 
-  // ── Render: Login ─────────────────────────────────────────────────────────────
-  function renderLogin() {
+  // ── Render: Connect ───────────────────────────────────────────────────────
+  function renderConnect() {
     return (
       <div className="login-wrap">
         <div className="login-card">
           <div className="login-logo">M</div>
           <div className="login-title">MilestonePay</div>
           <div className="login-sub">Anti-ghosting payment system for freelancers.<br />Lock funds. Deliver work. Get paid.</div>
-          <div className="fg">
-            <label className="fl">Your Name</label>
-            <input className="fi" type="text" placeholder="e.g. Eijay Palpal-latoc"
-              value={loginName} onChange={e => setLoginName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && doLogin()} />
-          </div>
-          <div className="fg">
-            <label className="fl">Email Address</label>
-            <input className="fi" type="email" placeholder="you@email.com"
-              value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && doLogin()} />
-          </div>
-          <div className="or-div">or connect your wallet</div>
-          <button className={`wallet-connect-btn${walletConnected ? ' connected' : ''}`} onClick={connectWallet}>
-            <span>{walletConnected ? '✅' : '👛'}</span>
-            <span>{walletConnected ? 'GD7X...K9QR — Connected' : 'Connect Freighter Wallet'}</span>
+          <button className="wallet-connect-btn" onClick={doConnect} disabled={loading}>
+            {loading
+              ? <><span className="spinner" /> Connecting...</>
+              : <><span>👛</span><span>Connect Freighter Wallet</span></>}
           </button>
-          <button className="btn btn-primary" onClick={doLogin}>Get Started →</button>
-          <div style={{ marginTop: 18, fontSize: 11, color: 'var(--ink3)', fontFamily: 'var(--mono)' }}>
-            Stellar Testnet · USDC · Soroban Smart Contracts{IS_DEMO ? ' · Demo Mode' : ''}
+          <div className="login-hint">
+            Don&apos;t have Freighter? <a href="https://freighter.app" target="_blank" rel="noreferrer">Install here →</a>
+          </div>
+          <div style={{ marginTop: 24, fontSize: 11, color: 'var(--ink3)', fontFamily: 'var(--mono)' }}>
+            Stellar Testnet · USDC · Soroban Smart Contracts
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Render: Dashboard ─────────────────────────────────────────────────────────
+  // ── Render: Role ──────────────────────────────────────────────────────────
+  function renderRole() {
+    return (
+      <div className="login-wrap">
+        <div className="login-card" style={{ maxWidth: 500 }}>
+          <div className="login-logo">M</div>
+          <div className="login-title">Welcome</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)', marginBottom: 8 }}>{wallet}</div>
+          <div className="login-sub">How will you use MilestonePay?</div>
+          <div className="role-grid">
+            <button className="role-card" onClick={() => selectRole('client')} disabled={loading}>
+              <div className="role-icon">🏢</div>
+              <div className="role-title">I&apos;m a Client</div>
+              <div className="role-desc">I have projects that need to be done. I&apos;ll lock USDC and hire freelancers.</div>
+            </button>
+            <button className="role-card" onClick={() => selectRole('freelancer')} disabled={loading}>
+              <div className="role-icon">💼</div>
+              <div className="role-title">I&apos;m a Freelancer</div>
+              <div className="role-desc">I deliver work for clients and receive guaranteed payments through escrow.</div>
+            </button>
+          </div>
+          {loading && <div style={{ fontSize: 13, color: 'var(--ink3)' }}><span className="spinner" style={{ borderColor: 'rgba(255,255,255,.2)', borderTopColor: 'var(--blue)' }} /> Saving...</div>}
+          <div style={{ fontSize: 11, color: 'var(--ink3)', fontFamily: 'var(--mono)', marginTop: 8 }}>
+            Connected as: {short(wallet)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render: Dashboard ─────────────────────────────────────────────────────
   function renderDashboard() {
-    const nextMs = projects.flatMap(p => p.milestones)
-      .filter(m => m.status === 'review' && m.timerSecs > 0)
-      .sort((a, b) => a.timerSecs - b.timerSecs)[0] ?? null;
-    const pending = projects.reduce((s, p) =>
-      s + p.milestones.filter(m => !['released'].includes(m.status)).reduce((a, m) => a + m.amount, 0), 0);
+    const isClient = role === 'client';
+    const allMs = projects.flatMap(p => p.milestones);
+    const pendingAmt = allMs.filter(m => m.status !== 'released' && m.status !== 'disputed').reduce((s, m) => s + m.amount, 0);
+    const releasedAmt = allMs.filter(m => m.status === 'released').reduce((s, m) => s + m.amount, 0);
+    const reviewCount = allMs.filter(m => m.status === 'review').length;
+    const nextMs = allMs.filter(m => m.status === 'review' && m.timerSecs > 0).sort((a, b) => a.timerSecs - b.timerSecs)[0] ?? null;
 
     return (
       <div className="page active">
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 28 }}>
           <div>
             <div className="eyebrow">Dashboard</div>
-            <div className="h1">Welcome back, {user.name.split(' ')[0]}!</div>
-            <div className="sub">Your projects and active milestones at a glance.</div>
+            <div className="h1">{isClient ? 'Your Projects' : 'Your Work'}</div>
+            <div className="sub">{isClient ? 'Projects you\'ve funded and their milestone status.' : 'Milestones assigned to your wallet.'}</div>
           </div>
-          <button className="btn btn-primary btn-primary-auto" onClick={() => go('create')}>+ New Project</button>
+          {isClient && <button className="btn btn-primary btn-primary-auto" onClick={() => go('create')}>+ New Project</button>}
         </div>
+
         <div className="stat-grid">
           <div className="stat">
-            <div className="stat-label">Wallet Balance</div>
-            <div className="stat-val" style={{ color: 'var(--green)' }}>${user.balance.toFixed(0)}</div>
+            <div className="stat-label">{isClient ? 'Total Locked' : 'Pending Earnings'}</div>
+            <div className="stat-val" style={{ color: 'var(--amber)' }}>${pendingAmt.toFixed(0)}</div>
             <div className="stat-sub">USDC</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Active Projects</div>
-            <div className="stat-val" style={{ color: 'var(--blue)' }}>{projects.length}</div>
-            <div className="stat-sub">{projects.length === 0 ? 'no projects yet' : `project${projects.length > 1 ? 's' : ''}`}</div>
+            <div className="stat-label">{isClient ? 'Released' : 'Earned'}</div>
+            <div className="stat-val" style={{ color: 'var(--green)' }}>${releasedAmt.toFixed(0)}</div>
+            <div className="stat-sub">USDC</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Pending Payments</div>
-            <div className="stat-val" style={{ color: 'var(--amber)' }}>${pending}</div>
-            <div className="stat-sub">USDC locked</div>
+            <div className="stat-label">{isClient ? 'Under Review' : 'Awaiting Review'}</div>
+            <div className="stat-val" style={{ color: 'var(--blue)' }}>{reviewCount}</div>
+            <div className="stat-sub">{reviewCount === 1 ? 'milestone' : 'milestones'}</div>
           </div>
           <div className="stat">
             <div className="stat-label">Next Deadline</div>
@@ -339,27 +492,31 @@ export default function App() {
             <div className="stat-sub">{nextMs ? nextMs.name : 'no active timers'}</div>
           </div>
         </div>
+
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <div className="h2">Projects</div>
+          <div className="h2">{isClient ? 'Projects' : 'Assigned Projects'}</div>
         </div>
+
         {projects.length === 0 ? (
           <div className="empty">
-            <div className="empty-ico">📭</div>
-            <div className="empty-ttl">No projects yet</div>
-            <div>Create a project to get started.</div>
+            <div className="empty-ico">{isClient ? '📭' : '🔍'}</div>
+            <div className="empty-ttl">{isClient ? 'No projects yet' : 'No projects assigned'}</div>
+            <div>{isClient ? 'Create a project to get started.' : 'When a client assigns your wallet to a project, it appears here.'}</div>
           </div>
         ) : (
           projects.map(p => {
             const total = p.milestones.reduce((s, m) => s + m.amount, 0);
             const done = p.milestones.filter(m => m.status === 'released').length;
-            const statusMs = p.milestones.find(m => m.status === 'review') ??
-              p.milestones.find(m => m.status === 'progress') ?? p.milestones[0];
+            const statusMs = p.milestones.find(m => m.status === 'review') ?? p.milestones.find(m => m.status === 'progress') ?? p.milestones[0];
             return (
               <div className="proj-card" key={p.id} onClick={() => openProject(p.id)}>
                 <div className="proj-icon">📁</div>
                 <div>
                   <div className="proj-name">{p.name}</div>
-                  <div className="proj-meta">{p.milestones.length} milestones · Freelancer: {short(p.freelancerWallet)}</div>
+                  <div className="proj-meta">
+                    {p.milestones.length} milestones ·{' '}
+                    {isClient ? `Freelancer: ${short(p.freelancerWallet)}` : `Client: ${short(p.clientWallet)}`}
+                  </div>
                   <div style={{ marginTop: 6 }}>
                     {statusMs && <span className={`badge ${statusMs.status}`}><span className="bd" />{STATUS_LABEL[statusMs.status]}</span>}
                   </div>
@@ -376,37 +533,37 @@ export default function App() {
     );
   }
 
-  // ── Render: Create ────────────────────────────────────────────────────────────
+  // ── Render: Create (client only) ──────────────────────────────────────────
   function renderCreate() {
     return (
       <div className="page active">
         <div className="back" onClick={() => go('dashboard')}>← Back to Dashboard</div>
         <div className="eyebrow">New Project</div>
         <div className="h1">Lock funds,<br />guarantee payment.</div>
-        <div className="sub" style={{ marginBottom: 32 }}>Enter the freelancer&apos;s wallet, set milestones, and lock USDC before work begins.</div>
+        <div className="sub" style={{ marginBottom: 32 }}>Set milestones, enter the freelancer&apos;s wallet, and lock USDC before work begins.</div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
           <div>
             <div className="card">
               <div className="clabel">Project Details</div>
-              <div className="frow">
-                <div className="fg">
-                  <label className="fl">Project Name</label>
-                  <input className="fi" type="text" placeholder="e.g. Brand Identity Redesign"
-                    value={formName} onChange={e => setFormName(e.target.value)} />
-                </div>
-                <div className="fg">
-                  <label className="fl">Your Wallet (Client)</label>
-                  <input className="fi" type="text" placeholder={user.wallet || 'Your Stellar wallet address'}
-                    value={formClientWallet} onChange={e => setFormClientWallet(e.target.value)} />
-                </div>
+              <div className="fg">
+                <label className="fl">Project Name</label>
+                <input className="fi" type="text" placeholder="e.g. Brand Identity Redesign"
+                  value={formName} onChange={e => setFormName(e.target.value)} />
+              </div>
+              <div className="fg">
+                <label className="fl">Your Wallet (Client)</label>
+                <input className="fi" type="text" value={wallet} readOnly style={{ opacity: .6, cursor: 'not-allowed' }} />
+                <div className="fhint">Auto-filled from your connected Freighter wallet</div>
               </div>
               <div className="fg" style={{ marginBottom: 0 }}>
-                <label className="fl">Freelancer&apos;s Wallet Address</label>
-                <input className="fi" type="text" placeholder="Ask your freelancer for their Stellar wallet"
+                <label className="fl">Freelancer&apos;s Stellar Wallet Address</label>
+                <input className="fi" type="text" placeholder="G... (ask your freelancer for their Stellar public key)"
                   value={formFreelancerWallet} onChange={e => setFormFreelancerWallet(e.target.value)} />
                 <div className="fhint">Funds release to this address on approval or deadline</div>
               </div>
             </div>
+
             <div className="card">
               <div className="clabel">Milestones</div>
               <div className="ms-build-headers">
@@ -432,6 +589,7 @@ export default function App() {
                 <div><span className="total-val">{buildTotal}</span><span style={{ fontSize: 11, color: 'var(--ink3)', marginLeft: 4 }}>USDC</span></div>
               </div>
             </div>
+
             <div className="card">
               <div className="clabel">Review Window</div>
               <div className="fg" style={{ marginBottom: 0 }}>
@@ -440,15 +598,16 @@ export default function App() {
                   <option value={172800}>48 hours (recommended)</option>
                   <option value={86400}>24 hours</option>
                   <option value={259200}>72 hours</option>
-                  <option value={10}>10 seconds (demo mode)</option>
                 </select>
                 <div className="fhint">You have this window to approve, request revision, or dispute before auto-release</div>
               </div>
             </div>
+
             <button className="btn btn-primary" onClick={lockProject} disabled={loading}>
-              {loading ? <><span className="spinner" /> Locking...</> : <>🔒 Lock ${buildTotal} USDC into Escrow</>}
+              {loading ? <><span className="spinner" /> Locking on-chain...</> : <>🔒 Lock ${buildTotal} USDC into Escrow</>}
             </button>
           </div>
+
           {/* Sidebar */}
           <div className="sidebar">
             <div className="clabel">Contract Preview</div>
@@ -464,14 +623,14 @@ export default function App() {
             <div className="srow"><span className="slbl">Freelancer</span><span className="sval">{short(formFreelancerWallet) || '—'}</span></div>
             <div className="srow"><span className="slbl">Review window</span><span className="sval">{DL_LABEL[formDeadline]}</span></div>
             <div className="srow"><span className="slbl">Wire fee</span><span className="sval" style={{ color: 'var(--green)' }}>&lt;$0.01</span></div>
-            <div className="srow"><span className="slbl">Mode</span><span className="sval" style={{ color: IS_DEMO ? 'var(--amber)' : 'var(--green)' }}>{IS_DEMO ? 'Demo' : 'On-chain'}</span></div>
+            <div className="srow"><span className="slbl">Network</span><span className="sval" style={{ color: 'var(--green)' }}>Stellar Testnet</span></div>
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Render: Project ───────────────────────────────────────────────────────────
+  // ── Render: Project ───────────────────────────────────────────────────────
   function renderProject() {
     const p = activeProject;
     if (!p) return null;
@@ -483,10 +642,14 @@ export default function App() {
           <div>
             <div className="eyebrow">Project</div>
             <div className="h1">{p.name}</div>
-            <div className="sub">Freelancer: {short(p.freelancerWallet, 8, 4)} · {p.milestones.length} milestones · ${total} USDC</div>
+            <div className="sub">
+              {isProjectClient ? `Freelancer: ${short(p.freelancerWallet, 8, 4)}` : `Client: ${short(p.clientWallet, 8, 4)}`}
+              {' · '}{p.milestones.length} milestones · ${total} USDC
+            </div>
           </div>
           <button className="btn btn-outline btn-sm" onClick={() => go('status')}>View Status →</button>
         </div>
+
         {p.milestones.map((m, i) => {
           const hasTimer = m.status === 'review' && m.timerSecs > 0;
           return (
@@ -512,7 +675,7 @@ export default function App() {
     );
   }
 
-  // ── Render: Milestone Detail ──────────────────────────────────────────────────
+  // ── Render: Milestone Detail ──────────────────────────────────────────────
   function renderMilestone() {
     const p = activeProject;
     const m = activeMilestone;
@@ -526,53 +689,59 @@ export default function App() {
       <div className="page active">
         <div className="back" onClick={() => go('project')}>← Back to Project</div>
         <div className="detail-grid">
-          {/* Left */}
           <div>
             <div className="eyebrow">Milestone {String(idx + 1).padStart(2, '0')} · {p.name}</div>
             <div className="h1">{m.name}</div>
-            <div className="sub" style={{ marginBottom: 20 }}>{m.desc || 'No description provided.'}</div>
+            <div className="sub" style={{ marginBottom: 16 }}>{m.desc || 'No description provided.'}</div>
+
+            {/* Role indicator */}
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '4px 10px',
+              background: isProjectClient ? 'var(--bluedim)' : isProjectFreelancer ? 'var(--greendim)' : 'var(--surf2)',
+              border: `1px solid ${isProjectClient ? 'rgba(59,130,246,.25)' : isProjectFreelancer ? 'rgba(16,185,129,.25)' : 'var(--bdr)'}`,
+              borderRadius: 6, fontSize: 11, fontFamily: 'var(--mono)',
+              color: isProjectClient ? 'var(--blue)' : isProjectFreelancer ? 'var(--green)' : 'var(--ink3)',
+              marginBottom: 20,
+            }}>
+              {isProjectClient ? '🏢 You are the Client' : isProjectFreelancer ? '💼 You are the Freelancer' : '👁 Observer'}
+            </div>
+
             <div className="card">
               <div className="clabel">Actions</div>
 
-              {m.status === 'created' && (
+              {/* ── FREELANCER ACTIONS ── */}
+              {m.status === 'created' && isProjectFreelancer && (
                 <>
                   <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '12px 14px', fontSize: 13, color: 'var(--ink3)', marginBottom: 14 }}>
-                    Status: <strong style={{ color: 'var(--blue)' }}>Created &amp; Funded</strong> — Freelancer can begin work.
+                    Funds are locked and ready. Start work when you&apos;re ready.
                   </div>
                   <div className="action-row">
-                    <button className="btn btn-outline btn-sm" onClick={freelancerStartWork}>▶ Freelancer: Start Work</button>
+                    <button className="btn btn-outline btn-sm" onClick={freelancerStartWork}>▶ Start Work</button>
                   </div>
                 </>
               )}
 
-              {m.status === 'progress' && (
+              {m.status === 'progress' && isProjectFreelancer && (
                 <>
                   <div style={{ background: 'var(--purpledim)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', padding: '12px 14px', fontSize: 13, color: 'var(--purple)', marginBottom: 14 }}>
-                    Status: <strong>In Progress</strong> — Freelancer is working on this milestone.
+                    <strong>In Progress</strong> — Submit your work when ready for client review.
                   </div>
                   <div className="action-row">
-                    <button className="btn btn-amber btn-sm" onClick={() => setModalSubmit(true)}>📤 Freelancer: Submit for Review</button>
+                    <button className="btn btn-amber btn-sm" onClick={() => setModalSubmit(true)}>📤 Submit for Review</button>
                   </div>
                 </>
               )}
 
-              {m.status === 'review' && (
+              {m.status === 'review' && isProjectFreelancer && (
                 <>
                   <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 12, lineHeight: 1.6 }}>
-                    Freelancer has submitted work. Review and decide — or do nothing and funds auto-release after the deadline.
+                    Work submitted — waiting for client. If no response, funds auto-release at deadline.
                   </div>
-                  {m.proofLink && (
-                    <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '10px 14px', fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--blue)', marginBottom: 12 }}>
-                      📎 Proof: {m.proofLink}
-                    </div>
-                  )}
                   <div className="timer-block" style={timerExpired ? { borderColor: 'var(--green)' } : {}}>
                     <div>
                       <div className="timer-lbl" style={{ color: timerExpired ? 'var(--green)' : 'var(--amber)' }}>
-                        {timerExpired ? 'DEADLINE REACHED' : 'AUTO-RELEASE IN'}
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--ink3)', fontFamily: 'var(--mono)', marginTop: 2 }}>
-                        {timerExpired ? 'Freelancer can now claim' : 'Client has not responded'}
+                        {timerExpired ? 'DEADLINE REACHED — CLAIM NOW' : 'AUTO-RELEASE IN'}
                       </div>
                     </div>
                     <div className="timer-val" style={{ color: timerExpired ? 'var(--green)' : 'var(--amber)' }}>
@@ -582,51 +751,102 @@ export default function App() {
                   <div className="timer-bar-wrap">
                     <div className="timer-bar" style={{ width: `${timerPct}%`, background: timerExpired ? 'var(--green)' : 'var(--amber)' }} />
                   </div>
-                  <div className="action-row" style={{ marginTop: 14 }}>
-                    <button className="btn btn-green btn-sm" onClick={approveMs}>✓ Approve &amp; Release</button>
-                    <button className="btn btn-amber btn-sm" onClick={() => setModalRevision(true)}>🔁 Request Revision</button>
-                    <button className="btn btn-red btn-sm" onClick={() => setModalDispute(true)}>⚠ Dispute</button>
-                  </div>
-                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ink3)' }}>
-                    Or wait — funds auto-release when timer reaches 00:00:00.
-                    <button className="btn btn-outline btn-sm"
-                      style={{ marginTop: 10, width: '100%' }}
-                      onClick={claimMs} disabled={!canClaim}>
-                      ↓ Claim Payment (after deadline)
-                    </button>
-                  </div>
+                  {canClaim && (
+                    <div className="action-row" style={{ marginTop: 14 }}>
+                      <button className="btn btn-green btn-sm" onClick={claimMs} disabled={loading}>
+                        {loading ? <span className="spinner" /> : '↓ Claim Payment'}
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
 
-              {m.status === 'revision' && (
+              {m.status === 'revision' && isProjectFreelancer && (
                 <>
                   <div className="rev-block">
-                    <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--purple)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 6 }}>Revision in Progress</div>
+                    <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--purple)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 6 }}>Revision Requested</div>
                     <div style={{ fontSize: 13, color: 'var(--ink2)' }}>{m.revFeedback || 'Client requested changes.'}</div>
                     <div style={{ marginTop: 8, fontSize: 12, color: 'var(--purple)', fontFamily: 'var(--mono)' }}>
-                      Fee paid: ${(m.amount * m.revFee / 100).toFixed(2)} USDC
+                      Revision fee paid to you: ${(m.amount * m.revFee / 100).toFixed(2)} USDC
                     </div>
                   </div>
                   <div className="action-row">
-                    <button className="btn btn-amber btn-sm" onClick={() => setModalSubmit(true)}>📤 Freelancer: Re-submit for Review</button>
+                    <button className="btn btn-amber btn-sm" onClick={() => setModalSubmit(true)}>📤 Re-submit for Review</button>
                   </div>
                 </>
               )}
 
+              {/* ── CLIENT ACTIONS ── */}
+              {m.status === 'created' && isProjectClient && (
+                <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '12px 14px', fontSize: 13, color: 'var(--ink3)' }}>
+                  ✅ Funds locked. Waiting for freelancer to start work.
+                </div>
+              )}
+
+              {m.status === 'progress' && isProjectClient && (
+                <div style={{ background: 'var(--purpledim)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', padding: '12px 14px', fontSize: 13, color: 'var(--purple)' }}>
+                  ⚙️ Freelancer is working on this milestone.
+                </div>
+              )}
+
+              {m.status === 'review' && isProjectClient && (
+                <>
+                  <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 12, lineHeight: 1.6 }}>
+                    Freelancer submitted work. Review and decide — or do nothing, funds auto-release at deadline.
+                  </div>
+                  {(m.proofLink || m.proofFileUrl) && (
+                    <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '10px 14px', fontSize: 12, fontFamily: 'var(--mono)', marginBottom: 12 }}>
+                      📎 Proof:{' '}
+                      {m.proofLink && <a href={m.proofLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{m.proofLink}</a>}
+                      {m.proofFileUrl && <a href={m.proofFileUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)', marginLeft: 6 }}>[Attached File]</a>}
+                    </div>
+                  )}
+                  <div className="timer-block">
+                    <div>
+                      <div className="timer-lbl">{timerExpired ? 'DEADLINE PASSED' : 'AUTO-RELEASE IN'}</div>
+                      <div style={{ fontSize: 10, color: 'var(--ink3)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+                        {timerExpired ? 'Freelancer can claim now' : 'Act now to approve, revise, or dispute'}
+                      </div>
+                    </div>
+                    <div className="timer-val">{timerExpired ? '00:00:00' : fmt(m.timerSecs)}</div>
+                  </div>
+                  <div className="timer-bar-wrap">
+                    <div className="timer-bar" style={{ width: `${timerPct}%` }} />
+                  </div>
+                  {!timerExpired && (
+                    <div className="action-row" style={{ marginTop: 14 }}>
+                      <button className="btn btn-green btn-sm" onClick={approveMs} disabled={loading}>
+                        {loading ? <span className="spinner" /> : '✓ Approve & Release'}
+                      </button>
+                      <button className="btn btn-amber btn-sm" onClick={() => setModalRevision(true)} disabled={loading}>🔁 Request Revision</button>
+                      <button className="btn btn-red btn-sm" onClick={() => setModalDispute(true)} disabled={loading}>⚠ Dispute</button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {m.status === 'revision' && isProjectClient && (
+                <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '12px 14px', fontSize: 13, color: 'var(--ink2)' }}>
+                  🔁 Revision in progress — waiting for freelancer to re-submit.
+                </div>
+              )}
+
+              {/* ── SHARED TERMINAL STATES ── */}
               {m.status === 'released' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0', fontSize: 14, color: 'var(--green)' }}>
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--green)', boxShadow: '0 0 8px var(--green)', flexShrink: 0 }} />
-                  ${m.amount} USDC has been released to the freelancer&apos;s wallet.
+                  ${m.amount} USDC released to the freelancer&apos;s wallet.
                 </div>
               )}
 
               {m.status === 'disputed' && (
                 <div style={{ background: 'var(--reddim)', border: '1px solid var(--red)', borderRadius: 'var(--r)', padding: 14, fontSize: 13, color: 'var(--red)' }}>
-                  ⚠ Dispute active — funds frozen, timer stopped. Admin notified. Awaiting resolution.
+                  ⚠ Dispute active — funds frozen. Admin is reviewing. Awaiting resolution.
                 </div>
               )}
             </div>
           </div>
+
           {/* Sidebar */}
           <div className="sidebar">
             <div className="clabel">Milestone Info</div>
@@ -638,17 +858,19 @@ export default function App() {
               <span className="slbl">Status</span>
               <span className="sval"><span className={`badge ${m.status}`}><span className="bd" />{STATUS_LABEL[m.status]}</span></span>
             </div>
+            <div className="srow"><span className="slbl">Client</span><span className="sval">{short(p.clientWallet, 8, 4)}</span></div>
             <div className="srow"><span className="slbl">Freelancer</span><span className="sval">{short(p.freelancerWallet, 8, 4)}</span></div>
             <div className="srow"><span className="slbl">Review window</span><span className="sval">{DL_LABEL[p.deadline] ?? `${p.deadline}s`}</span></div>
-            {m.proofLink && <div className="srow"><span className="slbl">Proof</span><span className="sval" style={{ color: 'var(--blue)' }}>Link submitted</span></div>}
-            {m.revFee > 0 && <div className="srow"><span className="slbl">Revision fee</span><span className="sval" style={{ color: 'var(--purple)' }}>${(m.amount * m.revFee / 100).toFixed(2)} USDC</span></div>}
+            {m.proofLink && <div className="srow"><span className="slbl">Proof link</span><span className="sval" style={{ color: 'var(--blue)' }}>Submitted</span></div>}
+            {m.proofFileUrl && <div className="srow"><span className="slbl">Proof file</span><span className="sval" style={{ color: 'var(--blue)' }}>Uploaded</span></div>}
+            {m.revFee > 0 && <div className="srow"><span className="slbl">Rev. fee</span><span className="sval" style={{ color: 'var(--purple)' }}>${(m.amount * m.revFee / 100).toFixed(2)} USDC</span></div>}
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Render: Status ────────────────────────────────────────────────────────────
+  // ── Render: Status ────────────────────────────────────────────────────────
   function renderStatus() {
     const p = activeProject;
     if (!p) return null;
@@ -661,7 +883,9 @@ export default function App() {
         <div className="back" onClick={() => go('project')}>← Back to Project</div>
         <div className="eyebrow">Status View</div>
         <div className="h1" style={{ marginBottom: 6 }}>{p.name}</div>
-        <div className="sub" style={{ marginBottom: 28 }}>Freelancer: {short(p.freelancerWallet, 8, 4)} · ${total} USDC total</div>
+        <div className="sub" style={{ marginBottom: 28 }}>
+          {isProjectClient ? `Freelancer: ${short(p.freelancerWallet, 8, 4)}` : `Client: ${short(p.clientWallet, 8, 4)}`} · ${total} USDC total
+        </div>
 
         <div className="sc-grid">
           {p.milestones.map(m => {
@@ -676,7 +900,7 @@ export default function App() {
                   {m.status === 'review' && m.timerSecs > 0 && <span style={{ color: 'var(--amber)' }}>{fmt(m.timerSecs)} remaining</span>}
                   {m.status === 'released' && <span style={{ color: 'var(--ink3)' }}>Funds sent</span>}
                   {m.status === 'disputed' && <span style={{ color: 'var(--red)' }}>Awaiting admin</span>}
-                  {(m.status === 'created' || m.status === 'progress') && <span style={{ color: 'var(--ink3)' }}>{STATUS_LABEL[m.status]}</span>}
+                  {(m.status === 'created' || m.status === 'progress' || m.status === 'revision') && <span style={{ color: 'var(--ink3)' }}>{STATUS_LABEL[m.status]}</span>}
                 </div>
               </div>
             );
@@ -687,6 +911,7 @@ export default function App() {
           <div className="card">
             <div className="clabel">On-Chain Activity</div>
             <div className="tl">
+              {p.timeline.length === 0 && <div style={{ color: 'var(--ink3)', fontSize: 13 }}>No activity yet.</div>}
               {p.timeline.map((t, i) => (
                 <div className="tl-item" key={i}>
                   <div className={`tl-dot ${t.dot}`} />
@@ -706,22 +931,27 @@ export default function App() {
               <div className="srow"><span className="slbl">Project</span><span className="sval">{p.name}</span></div>
               <div className="srow"><span className="slbl">Total locked</span><span className="sval">${total} USDC</span></div>
               <div className="srow"><span className="slbl">Released</span><span className="sval" style={{ color: 'var(--green)' }}>${released} USDC</span></div>
-              <div className="srow"><span className="slbl">Freelancer</span><span className="sval">{short(p.freelancerWallet, 8, 4)}</span></div>
+              <div className="srow">
+                <span className="slbl">{isProjectClient ? 'Freelancer' : 'Client'}</span>
+                <span className="sval">{short(isProjectClient ? p.freelancerWallet : p.clientWallet, 8, 4)}</span>
+              </div>
               <div className="srow"><span className="slbl">Disputes</span><span className="sval">{disputes > 0 ? `${disputes} active` : 'None'}</span></div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '10px 14px', marginTop: 12 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--ink3)', letterSpacing: '.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>TX</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.tx}</div>
-              <button onClick={() => { navigator.clipboard?.writeText(p.tx); showToast('Transaction hash copied', '⎘'); }}
-                style={{ background: 'none', border: 'none', color: 'var(--ink3)', cursor: 'pointer', fontSize: 12 }}>⎘</button>
-            </div>
+            {p.tx && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: '10px 14px', marginTop: 12 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--ink3)', letterSpacing: '.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>TX</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.tx}</div>
+                <button onClick={() => { navigator.clipboard?.writeText(p.tx); showToast('TX hash copied', '⎘'); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--ink3)', cursor: 'pointer', fontSize: 12 }}>⎘</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Render: Modals ────────────────────────────────────────────────────────────
+  // ── Render: Modals ────────────────────────────────────────────────────────
   function renderModalSubmit() {
     if (!modalSubmit) return null;
     return (
@@ -736,14 +966,22 @@ export default function App() {
               value={proofLink} onChange={e => setProofLink(e.target.value)} />
             <div className="fhint">Share a link to your deliverables</div>
           </div>
-          <div className="proof-area" onClick={() => setProofFileAttached(true)}>
+          <label className="proof-area" style={{ display: 'block', cursor: 'pointer' }}>
             <div className="proof-icon">📎</div>
-            <div style={{ fontSize: 13, color: 'var(--ink2)' }}>{proofFileAttached ? '✅ deliverables.zip attached' : 'Click to attach a file (optional)'}</div>
-            <div style={{ fontSize: 11, color: 'var(--ink3)', marginTop: 4, fontFamily: 'var(--mono)' }}>PNG, PDF, ZIP · max 20MB</div>
-          </div>
+            {uploadingFile
+              ? <div style={{ fontSize: 13, color: 'var(--amber)' }}><span className="spinner" /> Uploading...</div>
+              : proofFileName
+                ? <div style={{ fontSize: 13, color: 'var(--green)' }}>✅ {proofFileName}</div>
+                : <div style={{ fontSize: 13, color: 'var(--ink2)' }}>Click to attach a file (optional)</div>}
+            <div style={{ fontSize: 11, color: 'var(--ink3)', marginTop: 4, fontFamily: 'var(--mono)' }}>PNG, PDF, ZIP, MP4 · max 20MB</div>
+            <input type="file" style={{ display: 'none' }} onChange={handleFileChange}
+              accept=".png,.jpg,.jpeg,.pdf,.zip,.mp4,.mov,.fig,.sketch" />
+          </label>
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button className="btn btn-outline" style={{ flex: 1 }} onClick={() => setModalSubmit(false)}>Cancel</button>
-            <button className="btn btn-amber" style={{ flex: 2 }} onClick={confirmSubmit}>Submit for Review →</button>
+            <button className="btn btn-amber" style={{ flex: 2 }} onClick={confirmSubmit} disabled={loading || uploadingFile}>
+              {loading ? <><span className="spinner" /> Submitting...</> : 'Submit for Review →'}
+            </button>
           </div>
         </div>
       </div>
@@ -761,10 +999,10 @@ export default function App() {
           <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '.1em', color: 'var(--purple)', textTransform: 'uppercase', marginBottom: 8 }}>Request Revision</div>
           <div style={{ fontFamily: 'var(--disp)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Request Changes</div>
           <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 18, lineHeight: 1.6 }}>
-            A revision fee is required to prevent abuse. This amount is paid to the freelancer regardless of outcome.
+            A revision fee is required to prevent abuse. This amount is paid to the freelancer upfront regardless of outcome.
           </div>
           <div className="fg">
-            <label className="fl">Revision Feedback</label>
+            <label className="fl">Feedback</label>
             <textarea className="fi" rows={3} placeholder="Describe what needs to change..."
               value={revFeedback} onChange={e => setRevFeedback(e.target.value)} />
           </div>
@@ -777,18 +1015,11 @@ export default function App() {
             </select>
             <div className="fhint">Fee: ${feePaid} USDC ({revFeePercent}%)</div>
           </div>
-          <div className="rev-block" style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--purple)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>Revision Rules</div>
-            <div style={{ fontSize: 12, color: 'var(--ink2)', lineHeight: 1.8 }}>
-              <div>· Only 1 active revision per milestone</div>
-              <div>· Fee is paid to freelancer upfront</div>
-              <div>· If freelancer delivers → goes back to review</div>
-              <div>· If client ghosts → freelancer keeps milestone + fee</div>
-            </div>
-          </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button className="btn btn-outline" style={{ flex: 1 }} onClick={() => setModalRevision(false)}>Cancel</button>
-            <button className="btn btn-purple" style={{ flex: 2 }} onClick={confirmRevision}>Pay Fee &amp; Request Revision</button>
+            <button className="btn btn-purple" style={{ flex: 2 }} onClick={confirmRevision} disabled={loading}>
+              {loading ? <span className="spinner" /> : 'Pay Fee & Request Revision'}
+            </button>
           </div>
         </div>
       </div>
@@ -804,57 +1035,34 @@ export default function App() {
           <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '.1em', color: 'var(--red)', textTransform: 'uppercase', marginBottom: 8 }}>Dispute</div>
           <div style={{ fontFamily: 'var(--disp)', fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Raise a Dispute</div>
           <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 18, lineHeight: 1.6 }}>
-            Funds will be <strong style={{ color: 'var(--amber)' }}>frozen</strong> and the timer stopped. An admin will review and release funds to the correct party.
-          </div>
-          <div className="fg">
-            <label className="fl">Reason</label>
-            <select className="fi">
-              <option>Client requesting unpaid revisions</option>
-              <option>Delivered work doesn&apos;t match scope</option>
-              <option>Client unresponsive after delivery</option>
-              <option>Scope changed without agreement</option>
-              <option>Other</option>
-            </select>
-          </div>
-          <div className="fg" style={{ marginBottom: 0 }}>
-            <label className="fl">Evidence Link (optional)</label>
-            <input className="fi" type="text" placeholder="Screenshot URL, Drive link, chat log..." />
-          </div>
-          <div style={{ background: 'var(--surf2)', border: '1px solid var(--bdr)', borderRadius: 'var(--r)', padding: 12, margin: '14px 0' }}>
-            <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--ink3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>3-Step Resolution</div>
-            <div style={{ fontSize: 12, color: 'var(--ink2)', lineHeight: 1.8 }}>
-              <div>1. raise_dispute() — funds frozen, timer stopped</div>
-              <div>2. Both parties submit evidence within 72h</div>
-              <div>3. Admin calls resolve_dispute(winner)</div>
-            </div>
+            Funds will be <strong style={{ color: 'var(--amber)' }}>frozen</strong> and the timer stopped. An admin will review and release to the correct party.
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-outline" style={{ flex: 1 }} onClick={() => setModalDispute(false)}>Cancel</button>
-            <button className="btn btn-red-solid" style={{ flex: 2 }} onClick={confirmDispute}>⚠ Raise Dispute On-Chain</button>
+            <button className="btn btn-red-solid" style={{ flex: 2 }} onClick={confirmDispute} disabled={loading}>
+              {loading ? <span className="spinner" /> : '⚠ Raise Dispute On-Chain'}
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Root render ───────────────────────────────────────────────────────────────
-  if (page === 'login') {
-    return (
-      <>
-        {renderLogin()}
-        <div className={`toast${toast.show ? ' show' : ''}`}>
-          <span className="t-icon">{toast.icon}</span>
-          <div dangerouslySetInnerHTML={{ __html: toast.msg }} />
-        </div>
-      </>
-    );
-  }
+  // ── Toast element ─────────────────────────────────────────────────────────
+  const toastEl = (
+    <div className={`toast${toast.show ? ' show' : ''}`}>
+      <span className="t-icon">{toast.icon}</span>
+      <div dangerouslySetInnerHTML={{ __html: toast.msg }} />
+    </div>
+  );
+
+  // ── Root render ───────────────────────────────────────────────────────────
+  if (page === 'connect') return <>{renderConnect()}{toastEl}</>;
+  if (page === 'role') return <>{renderRole()}{toastEl}</>;
 
   return (
     <>
-      {/* App shell */}
       <div className="wrap">
-        {/* Topbar */}
         <header className="topbar">
           <div className="logo" onClick={() => go('dashboard')}>
             <div className="logo-mark">M</div>
@@ -864,19 +1072,14 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-right">
-            <div className="balance-chip">
-              <span>⬡</span>
-              <span>{user.balance.toFixed(2)}</span>
-              <span style={{ color: 'var(--ink3)' }}>USDC</span>
-            </div>
+            <span className={`role-badge ${role}`}>{role}</span>
             <div className="wallet-chip">
               <div className="wdot" />
-              <span>{short(user.wallet)}</span>
+              <span>{short(wallet)}</span>
             </div>
           </div>
         </header>
 
-        {/* Pages */}
         {page === 'dashboard' && renderDashboard()}
         {page === 'create' && renderCreate()}
         {page === 'project' && renderProject()}
@@ -884,35 +1087,10 @@ export default function App() {
         {page === 'status' && renderStatus()}
       </div>
 
-      {/* Toast */}
-      <div className={`toast${toast.show ? ' show' : ''}`}>
-        <span className="t-icon">{toast.icon}</span>
-        <div dangerouslySetInnerHTML={{ __html: toast.msg }} />
-      </div>
-
-      {/* Modals */}
+      {toastEl}
       {renderModalSubmit()}
       {renderModalRevision()}
       {renderModalDispute()}
-
-      {/* Onboarding banner */}
-      <div className={`ob${obVisible ? ' visible' : ''}`}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 34, height: 34, background: 'var(--bluedim)', borderRadius: 8, display: 'grid', placeItems: 'center', fontSize: 16 }}>👛</div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500 }}>New to Stellar?</div>
-            <div style={{ fontSize: 11, color: 'var(--ink3)' }}>Install Freighter to lock and receive USDC payments.</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <a href="https://freighter.app" target="_blank" rel="noreferrer"
-            style={{ padding: '8px 14px', background: 'var(--blue)', color: '#fff', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500, textDecoration: 'none' }}>
-            Install Freighter →
-          </a>
-          <button onClick={() => setObVisible(false)}
-            style={{ background: 'none', border: 'none', color: 'var(--ink3)', cursor: 'pointer', fontSize: 18, padding: '4px 8px' }}>×</button>
-        </div>
-      </div>
     </>
   );
 }

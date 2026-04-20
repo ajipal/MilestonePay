@@ -1,5 +1,5 @@
-export type PageName = 'login' | 'dashboard' | 'create' | 'project' | 'milestone' | 'status';
-
+export type PageName = 'connect' | 'role' | 'dashboard' | 'create' | 'project' | 'milestone' | 'status';
+export type UserRole = 'client' | 'freelancer';
 export type MsStatus = 'created' | 'progress' | 'review' | 'revision' | 'released' | 'disputed';
 
 export interface BuildMs {
@@ -19,6 +19,7 @@ export interface MilestoneData {
   timerSecs: number;
   timerMax: number;
   proofLink: string;
+  proofFileUrl: string;
   revFee: number;
   revFeedback: string;
 }
@@ -32,13 +33,6 @@ export interface Project {
   tx: string;
   milestones: MilestoneData[];
   timeline: TimelineEntry[];
-}
-
-export interface User {
-  name: string;
-  email: string;
-  wallet: string;
-  balance: number;
 }
 
 export interface TimelineEntry {

@@ -204,3 +204,19 @@ body::after {
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .ms-build-headers { display: grid; grid-template-columns: 1fr 1fr 120px 36px; gap: 8px; padding: 0 0 8px; font-size: 10px; color: var(--ink3); font-family: var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+/* Role selection */
+.role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 24px 0; }
+.role-card { background: var(--surf2); border: 1.5px solid var(--bdrm); border-radius: var(--rl); padding: 24px 20px; text-align: center; cursor: pointer; transition: all .2s; display: flex; flex-direction: column; align-items: center; gap: 10px; font-family: var(--body); }
+.role-card:hover:not(:disabled) { border-color: var(--blue); background: var(--bluedim); }
+.role-card:disabled { opacity: .4; cursor: not-allowed; }
+.role-icon { font-size: 32px; line-height: 1; }
+.role-title { font-family: var(--disp); font-size: 15px; font-weight: 700; color: var(--ink); }
+.role-desc { font-size: 12px; color: var(--ink2); line-height: 1.5; }
+/* Login hint */
+.login-hint { font-size: 12px; color: var(--ink3); margin-top: 12px; }
+.login-hint a { color: var(--blue); text-decoration: none; }
+.login-hint a:hover { text-decoration: underline; }
+/* Role badge in topbar */
+.role-badge { padding: 4px 10px; border-radius: 6px; font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.role-badge.client { background: var(--bluedim); color: var(--blue); border: 1px solid rgba(59,130,246,.25); }
+.role-badge.freelancer { background: var(--greendim); color: var(--green); border: 1px solid rgba(16,185,129,.25); }
