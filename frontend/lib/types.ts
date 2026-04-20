@@ -1,31 +1,50 @@
-export type MilestoneStatus = 'locked' | 'waiting' | 'released' | 'disputed';
+export type PageName = 'login' | 'dashboard' | 'create' | 'project' | 'milestone' | 'status';
 
-export interface MilestoneState {
+export type MsStatus = 'created' | 'progress' | 'review' | 'revision' | 'released' | 'disputed';
+
+export interface BuildMs {
   id: number;
-  name: string;
+  title: string;
+  desc: string;
   amount: number;
-  status: MilestoneStatus;
+}
+
+export interface MilestoneData {
+  id: number;
+  projId: number;
+  name: string;
+  desc: string;
+  amount: number;
+  status: MsStatus;
   timerSecs: number;
   timerMax: number;
+  proofLink: string;
+  revFee: number;
+  revFeedback: string;
 }
 
-export interface MsInput {
+export interface Project {
   id: number;
-  name: string;
-  amount: number;
-}
-
-export interface TimelineEntry {
-  dot: 'done' | 'active';
-  time: string;
-  text: string;
-}
-
-export interface ProjectConfig {
   name: string;
   clientWallet: string;
   freelancerWallet: string;
-  deadline: string;
+  deadline: number;
+  tx: string;
+  milestones: MilestoneData[];
+  timeline: TimelineEntry[];
+}
+
+export interface User {
+  name: string;
+  email: string;
+  wallet: string;
+  balance: number;
+}
+
+export interface TimelineEntry {
+  dot: 'done' | 'act';
+  time: string;
+  text: string;
 }
 
 export interface OnChainMilestone {
