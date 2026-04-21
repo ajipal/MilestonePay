@@ -3,7 +3,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     token, symbol_short,
-    Address, Env,
+    Address, Env, Vec,
 };
 
 // ─── STORAGE KEYS ─────────────────────────────────────────────────────────────
@@ -50,6 +50,59 @@ impl MilestonePayContract {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    // ── CREATE PROJECT BATCH ────────────────────────────────────────────────
+    // Locks ALL milestone funds in ONE transaction. Each milestone gets its
+    // own on-chain entry (using milestone_id as key) so releases are independent.
+    pub fn create_project_batch(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        token: Address,
+        milestone_ids: Vec<u64>,
+        amounts: Vec<i128>,
+        deadline: u64,
+    ) {
+        client.require_auth();
+
+        let len = milestone_ids.len();
+        if len != amounts.len() {
+            panic!("milestone_ids and amounts length mismatch");
+        }
+
+        let mut total_amount: i128 = 0;
+        for i in 0..len {
+            total_amount += amounts.get(i).unwrap();
+        }
+
+        // ONE transfer for the entire project total
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&client, &env.current_contract_address(), &total_amount);
+
+        // Store individual on-chain entries per milestone
+        for i in 0..len {
+            let ms_id = milestone_ids.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+
+            if env.storage().persistent().has(&DataKey::Milestone(ms_id)) {
+                panic!("milestone already exists");
+            }
+
+            let milestone = MilestoneData {
+                client: client.clone(),
+                freelancer: freelancer.clone(),
+                amount,
+                token: token.clone(),
+                deadline,
+                completed: false,
+                released: false,
+                disputed: false,
+            };
+            env.storage().persistent().set(&DataKey::Milestone(ms_id), &milestone);
+        }
+
+        env.events().publish((symbol_short!("batch"), total_amount), len);
     }
 
     // ── CREATE MILESTONE ────────────────────────────────────────────────────
@@ -272,6 +325,46 @@ impl MilestonePayContract {
         );
     }
 
+    // ── CANCEL MILESTONE ────────────────────────────────────────────────────
+    // Called by the client to cancel a milestone and get a full refund,
+    // but only if the freelancer has not yet started work (completed = false).
+    pub fn cancel_milestone(env: Env, project_id: u64, client: Address) {
+        client.require_auth();
+
+        let milestone: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(project_id))
+            .expect("milestone not found");
+
+        if milestone.client != client {
+            panic!("caller is not the registered client");
+        }
+        if milestone.completed {
+            panic!("cannot cancel — freelancer has already submitted work");
+        }
+        if milestone.released {
+            panic!("funds already released");
+        }
+        if milestone.disputed {
+            panic!("cannot cancel — dispute is active");
+        }
+
+        let token_client = token::Client::new(&env, &milestone.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &client,
+            &milestone.amount,
+        );
+
+        env.storage().persistent().remove(&DataKey::Milestone(project_id));
+
+        env.events().publish(
+            (symbol_short!("canceled"), project_id),
+            milestone.amount,
+        );
+    }
+
     // ── RESOLVE DISPUTE ─────────────────────────────────────────────────────
     // Admin-only function. Releases funds to the specified winner address.
     // winner must be either the client or the freelancer.
@@ -299,9 +392,6 @@ impl MilestonePayContract {
             .get(&DataKey::Milestone(project_id))
             .expect("milestone not found");
 
-        if !milestone.disputed {
-            panic!("no active dispute");
-        }
         if milestone.released {
             panic!("funds already released");
         }
@@ -325,6 +415,101 @@ impl MilestonePayContract {
         env.events().publish(
             (symbol_short!("resolved"), project_id),
             winner,
+        );
+    }
+
+    // ── ADMIN CANCEL MILESTONE ──────────────────────────────────────────────
+    // Admin-only. Refunds the full locked amount to the client and closes
+    // the milestone regardless of its completed/disputed state.
+    // Used when a dispute is resolved in the client's favour and the entire
+    // project needs to be terminated.
+    pub fn admin_cancel_milestone(env: Env, project_id: u64, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+        if admin != stored_admin {
+            panic!("caller is not the admin");
+        }
+
+        let milestone: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(project_id))
+            .expect("milestone not found");
+
+        if milestone.released {
+            panic!("funds already released");
+        }
+
+        let token_client = token::Client::new(&env, &milestone.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &milestone.client,
+            &milestone.amount,
+        );
+
+        env.storage().persistent().remove(&DataKey::Milestone(project_id));
+
+        env.events().publish(
+            (symbol_short!("canceled"), project_id),
+            milestone.amount,
+        );
+    }
+
+    // ── REQUEST REVISION ────────────────────────────────────────────────────
+    // Client pays a partial revision fee to the freelancer immediately from
+    // the locked escrow. The remaining amount stays locked and is released
+    // when the client calls confirm_delivery after re-submission.
+    pub fn request_revision(
+        env:        Env,
+        project_id: u64,
+        client:     Address,
+        rev_amount: i128,
+    ) {
+        client.require_auth();
+
+        let mut milestone: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(project_id))
+            .expect("milestone not found");
+
+        if milestone.client != client {
+            panic!("caller is not the registered client");
+        }
+        if !milestone.completed {
+            panic!("milestone not yet submitted");
+        }
+        if milestone.released {
+            panic!("funds already released");
+        }
+        if milestone.disputed {
+            panic!("dispute active");
+        }
+        if rev_amount < 0 || rev_amount > milestone.amount {
+            panic!("invalid revision fee amount");
+        }
+
+        if rev_amount > 0 {
+            let token_client = token::Client::new(&env, &milestone.token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &milestone.freelancer,
+                &rev_amount,
+            );
+        }
+
+        milestone.amount -= rev_amount;
+        milestone.completed = false;
+        env.storage().persistent().set(&DataKey::Milestone(project_id), &milestone);
+
+        env.events().publish(
+            (symbol_short!("revision"), project_id),
+            rev_amount,
         );
     }
 
