@@ -471,14 +471,12 @@ export default function App() {
     const link = proofLink || proofFileUrl || '';
     setLoading(true);
     try {
-      // For re-submissions after revision, skip mark_complete — on-chain `completed`
-      // is already true from the first submission, so confirm_delivery will still work.
+      // Always call mark_complete on-chain. For re-submissions after revision,
+      // request_revision reset completed=false, so mark_complete is needed again.
       const isResubmission = m.status === 'revision';
-      if (!isResubmission) {
-        const { markComplete } = await import('@/lib/contract');
-        const { signTx } = await import('@/lib/wallet');
-        await markComplete(wallet, m.id, signTx);
-      }
+      const { markComplete } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await markComplete(wallet, m.id, signTx);
       const { updateMsStatus, addTimeline } = await import('@/lib/db');
       await updateMsStatus(m.id, { status: 'review', review_expires_at: expiresAt, proof_link: proofLink, proof_file_url: proofFileUrl });
       await addTimeline(p.id, 'done', `<strong>${isResubmission ? 'Re-submitted' : 'Milestone submitted'}</strong> — "${m.name}". Proof: ${link || 'No link'}`);
@@ -501,18 +499,19 @@ export default function App() {
     const remaining = parseFloat((m.amount - feePaid).toFixed(7));
     setLoading(true);
     try {
-      // Revision is tracked off-chain only. The on-chain `completed` flag stays true
-      // so the freelancer can re-submit and the client can still confirm_delivery.
+      const { requestRevision } = await import('@/lib/contract');
+      const { signTx } = await import('@/lib/wallet');
+      await requestRevision(wallet, m.id, feePaid, signTx);
       const { updateMsStatus, addTimeline } = await import('@/lib/db');
       await updateMsStatus(m.id, {
         status: 'revision', rev_fee: feePaid,
         rev_feedback: revFeedback || 'Client requested changes.',
         review_expires_at: null, amount: remaining,
       });
-      await addTimeline(p.id, 'act', `<strong>Revision requested</strong> on "${m.name}" — ${feePaid} XLM revision fee noted.`);
+      await addTimeline(p.id, 'act', `<strong>Revision requested</strong> on "${m.name}" — ${feePaid} XLM paid to freelancer.`);
       patchMilestoneInProject(p.id, m.id, { status: 'revision', revFee: feePaid, revFeedback: revFeedback || 'Client requested changes.', timerSecs: 0, amount: remaining });
-      addTimelineToProject(p.id, 'act', `<strong>Revision requested</strong> on "${m.name}" — ${feePaid} XLM fee noted`);
-      showToast(`Revision requested — ${feePaid} XLM fee recorded`, '🔁');
+      addTimelineToProject(p.id, 'act', `<strong>Revision requested</strong> on "${m.name}" — ${feePaid} XLM paid to freelancer`);
+      showToast(`${feePaid} XLM sent to freelancer — revision started`, '🔁');
     } catch (e: unknown) {
       showToast((e as Error).message, '⚠');
     } finally {
