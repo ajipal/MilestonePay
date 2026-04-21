@@ -366,10 +366,8 @@ export default function App() {
       const { signTx } = await import('@/lib/wallet');
       const { deleteProject } = await import('@/lib/db');
       if (p.tx) {
-        const { cancelMilestone } = await import('@/lib/contract');
-        for (const ms of p.milestones) {
-          await cancelMilestone(wallet, ms.id, signTx);
-        }
+        const { cancelProjectBatch } = await import('@/lib/contract');
+        await cancelProjectBatch(wallet, p.milestones.map(ms => ms.id), signTx);
       }
       await deleteProject(withdrawProjectId);
       setProjects(prev => prev.filter(proj => proj.id !== withdrawProjectId));

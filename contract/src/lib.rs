@@ -325,6 +325,56 @@ impl MilestonePayContract {
         );
     }
 
+    // ── CANCEL PROJECT BATCH ────────────────────────────────────────────────
+    // Called by the client to cancel ALL milestones in ONE transaction.
+    // Sums the locked amounts, transfers the total back to the client,
+    // and removes each milestone entry — one Freighter confirmation total.
+    pub fn cancel_project_batch(
+        env: Env,
+        client: Address,
+        milestone_ids: Vec<u64>,
+    ) {
+        client.require_auth();
+
+        let mut total: i128 = 0;
+        let mut token_addr: Option<Address> = None;
+
+        for i in 0..milestone_ids.len() {
+            let ms_id = milestone_ids.get(i).unwrap();
+            let milestone: MilestoneData = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Milestone(ms_id))
+                .expect("milestone not found");
+
+            if milestone.client != client {
+                panic!("caller is not the registered client");
+            }
+            if milestone.completed {
+                panic!("cannot cancel — freelancer has already submitted work");
+            }
+            if milestone.released {
+                panic!("funds already released");
+            }
+            if milestone.disputed {
+                panic!("cannot cancel — dispute is active");
+            }
+
+            if token_addr.is_none() {
+                token_addr = Some(milestone.token.clone());
+            }
+            total += milestone.amount;
+            env.storage().persistent().remove(&DataKey::Milestone(ms_id));
+        }
+
+        if total > 0 {
+            let token_client = token::Client::new(&env, &token_addr.unwrap());
+            token_client.transfer(&env.current_contract_address(), &client, &total);
+        }
+
+        env.events().publish((symbol_short!("canceled"), client), total);
+    }
+
     // ── CANCEL MILESTONE ────────────────────────────────────────────────────
     // Called by the client to cancel a milestone and get a full refund,
     // but only if the freelancer has not yet started work (completed = false).

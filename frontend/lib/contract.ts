@@ -157,6 +157,18 @@ export async function requestRevision(clientWallet: string, projectId: number, r
   ], sign);
 }
 
+export async function cancelProjectBatch(
+  walletAddress: string,
+  milestoneIds: number[],
+  sign: SignFn,
+): Promise<string> {
+  const msIdsVal = xdr.ScVal.scvVec(milestoneIds.map(id => nativeToScVal(BigInt(id), { type: 'u64' })));
+  return invoke(walletAddress, 'cancel_project_batch', [
+    Address.fromString(walletAddress).toScVal(),
+    msIdsVal,
+  ], sign);
+}
+
 export async function cancelMilestone(walletAddress: string, projectId: number, sign: SignFn) {
   return invoke(walletAddress, 'cancel_milestone', [
     nativeToScVal(BigInt(projectId), { type: 'u64' }),

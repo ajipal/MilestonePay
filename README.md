@@ -130,9 +130,9 @@ created → progress → review → released   (happy path)
 
 | Item | Value |
 |---|---|
-| **Contract ID** | `CAI3WA4XX3U2PHFFTRUP53ULXOBUKP7HP3G2FPWZZSONNQOAMEVMNAYG` |
+| **Contract ID** | `CAYNYPE56D2PHSMH3ZV4GSHO624GYO4JDHIS6KXDTYWSYEFLCPDPT22E` |
 | **Network** | Stellar Testnet |
-| **Explorer** | https://stellar.expert/explorer/testnet/contract/CAI3WA4XX3U2PHFFTRUP53ULXOBUKP7HP3G2FPWZZSONNQOAMEVMNAYG |
+| **Explorer** | https://stellar.expert/explorer/testnet/contract/CAYNYPE56D2PHSMH3ZV4GSHO624GYO4JDHIS6KXDTYWSYEFLCPDPT22E |
 
 ---
 
@@ -325,7 +325,7 @@ stellar contract invoke \
 
 - Deploy guide: https://github.com/armlynobinguar/Stellar-Bootcamp-2026
 - Soroban docs: https://developers.stellar.org/docs/smart-contracts
-- Contract explorer: https://stellar.expert/explorer/testnet/contract/CAI3WA4XX3U2PHFFTRUP53ULXOBUKP7HP3G2FPWZZSONNQOAMEVMNAYG
+- Contract explorer: https://stellar.expert/explorer/testnet/contract/CAYNYPE56D2PHSMH3ZV4GSHO624GYO4JDHIS6KXDTYWSYEFLCPDPT22E
 
 ---
 
