@@ -67,7 +67,7 @@ Clients lock XLM per milestone into a Soroban smart contract. If they fail to co
 2. **Dashboard** — Projects assigned to your wallet appear automatically. Filter and search across all projects.
 3. **Project Page** — See all milestones. For each "Not Started" milestone, click **Start Work**.
 4. **Submit Milestone** — When done, click **Submit for Review**. Attach a delivery link (Figma, GitHub, Drive) or upload a file. This calls `mark_complete` on-chain and starts the client's review countdown.
-5. **Revision** — If the client requests revision, the milestone moves back to "Revision" with their feedback. Re-submit when changes are done (no extra on-chain call needed — `confirm_delivery` still works).
+5. **Revision** — If the client requests revision, the revision fee is paid to you immediately from escrow. The milestone moves back to "Revision" with the client's feedback. Re-submit when changes are done — `mark_complete` is called again, then the client can `confirm_delivery` for the remaining amount.
 6. **Claim Payment** — If the review timer expires and the client didn't act, click **Claim Payment** to auto-release funds.
 7. **Dispute** — If you believe the client is acting in bad faith (e.g. timer expiring with no response and they blocked you), raise a dispute.
 
@@ -101,15 +101,16 @@ created → progress → review → released   (happy path)
 |---|---|---|
 | `initialize()` | Deployer | Sets admin address for dispute resolution |
 | `create_project_batch()` | Client | Locks total XLM for all milestones in one transaction |
+| `cancel_project_batch()` | Client | Refunds all milestone XLM to client in one transaction (used on project withdrawal) |
 | `create_milestone()` | Client | Locks XLM for a single milestone |
 | `mark_complete()` | Freelancer | Signals work delivered, starts client review countdown |
 | `confirm_delivery()` | Client | Approves work and immediately releases funds to freelancer |
 | `claim_payment()` | Freelancer | Auto-releases funds after review deadline passes |
-| `request_revision()` | Client | Resets milestone to revision state (fee tracked off-chain) |
+| `request_revision()` | Client | Pays revision fee to freelancer from escrow, resets milestone for re-submission |
 | `raise_dispute()` | Client or Freelancer | Freezes funds, flags for admin review |
 | `resolve_dispute()` | Admin only | Releases funds to winner (client or freelancer) |
 | `admin_cancel_milestone()` | Admin only | Refunds client and removes milestone (used for full project cancellation) |
-| `cancel_milestone()` | Client | Full refund if freelancer hasn't started yet |
+| `cancel_milestone()` | Client | Full refund for a single milestone if freelancer hasn't started yet |
 | `get_milestone()` | Anyone | Returns full on-chain state for a milestone |
 
 ---
@@ -158,7 +159,7 @@ cd contract
 cargo build --target wasm32-unknown-unknown --release
 ```
 
-Output: `target/wasm32-unknown-unknown/release/milestone_pay.wasm`
+Output: `target/wasm32-unknown-unknown/release/soroban_community_treasury.wasm`
 
 ---
 
@@ -194,7 +195,7 @@ stellar keys fund deployer --network testnet
 
 # 3. Deploy the contract
 stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/milestone_pay.wasm \
+  --wasm target/wasm32-unknown-unknown/release/soroban_community_treasury.wasm \
   --source deployer \
   --network testnet
 
