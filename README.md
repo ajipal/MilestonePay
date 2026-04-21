@@ -2,7 +2,7 @@
 
 > Anti-ghosting milestone escrow for freelancers — get paid automatically, even if the client disappears.
 
-**Live App:** https://milestone-pay-psi.vercel.app
+**Live App:** https://milestone-pay.vercel.app
 
 ---
 
