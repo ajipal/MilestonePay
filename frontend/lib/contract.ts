@@ -7,6 +7,7 @@ import {
   nativeToScVal,
   scValToNative,
   Address,
+  xdr,
 } from '@stellar/stellar-sdk';
 import type { OnChainMilestone } from './types';
 
@@ -34,20 +35,31 @@ async function invoke(walletAddress: string, method: string, args: ReturnType<ty
 
   const prepared  = SorobanRpc.assembleTransaction(tx, sim).build();
   const signedXdr = await sign(prepared.toXDR());
-  const signedTx  = TransactionBuilder.fromXDR(signedXdr, NETWORK);
-  const submitted = await server.sendTransaction(signedTx);
 
-  if (submitted.status === 'ERROR') throw new Error('Transaction failed to submit');
+  // Use raw JSON-RPC to avoid stellar-sdk XDR parsing bugs ("Bad union switch")
+  const sendRes  = await fetch(RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'sendTransaction', params: { transaction: signedXdr } }),
+  });
+  const sendJson = await sendRes.json();
+  if (sendJson.error) throw new Error(sendJson.error.message ?? 'RPC error sending transaction');
+  const { hash, status: sendStatus } = sendJson.result ?? {};
+  if (sendStatus === 'ERROR') throw new Error('Transaction rejected by network');
 
-  let poll = await server.getTransaction(submitted.hash);
-  let attempts = 0;
-  while (poll.status === 'NOT_FOUND' && attempts < 30) {
+  for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 1000));
-    poll = await server.getTransaction(submitted.hash);
-    attempts++;
+    const pollRes  = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getTransaction', params: { hash } }),
+    });
+    const pollJson = await pollRes.json();
+    const status   = pollJson.result?.status;
+    if (status === 'SUCCESS') return hash as string;
+    if (status === 'FAILED')  throw new Error('Transaction execution failed on-chain');
   }
-  if (poll.status === 'FAILED') throw new Error('Transaction execution failed');
-  return submitted.hash;
+  throw new Error('Transaction timed out — check stellar.expert for status');
 }
 
 export async function getMilestone(projectId: number): Promise<OnChainMilestone | null> {
@@ -68,6 +80,27 @@ export async function getMilestone(projectId: number): Promise<OnChainMilestone 
   }
 }
 
+export async function createProjectBatch(
+  walletAddress: string,
+  freelancer: string,
+  token: string,
+  milestoneIds: number[],
+  amounts: number[],
+  deadlineUnix: number,
+  sign: SignFn,
+): Promise<string> {
+  const msIdsVal  = xdr.ScVal.scvVec(milestoneIds.map(id => nativeToScVal(BigInt(id),  { type: 'u64' })));
+  const amountsVal = xdr.ScVal.scvVec(amounts.map(a   => nativeToScVal(BigInt(Math.round(a * 10_000_000)), { type: 'i128' })));
+  return invoke(walletAddress, 'create_project_batch', [
+    Address.fromString(walletAddress).toScVal(),
+    Address.fromString(freelancer).toScVal(),
+    Address.fromString(token).toScVal(),
+    msIdsVal,
+    amountsVal,
+    nativeToScVal(BigInt(deadlineUnix), { type: 'u64' }),
+  ], sign);
+}
+
 export async function createMilestone(
   walletAddress: string,
   projectId: number,
@@ -82,7 +115,7 @@ export async function createMilestone(
     Address.fromString(walletAddress).toScVal(),
     Address.fromString(freelancer).toScVal(),
     Address.fromString(token).toScVal(),
-    nativeToScVal(BigInt(amount * 1_000_000), { type: 'i128' }),
+    nativeToScVal(BigInt(amount * 10_000_000), { type: 'i128' }),
     nativeToScVal(BigInt(deadlineUnix), { type: 'u64' }),
   ], sign);
 }
@@ -105,6 +138,42 @@ export async function claimPayment(walletAddress: string, projectId: number, sig
   return invoke(walletAddress, 'claim_payment', [
     nativeToScVal(BigInt(projectId), { type: 'u64' }),
     Address.fromString(walletAddress).toScVal(),
+  ], sign);
+}
+
+export async function adminCancelMilestone(adminWallet: string, projectId: number, sign: SignFn) {
+  return invoke(adminWallet, 'admin_cancel_milestone', [
+    nativeToScVal(BigInt(projectId), { type: 'u64' }),
+    Address.fromString(adminWallet).toScVal(),
+  ], sign);
+}
+
+export async function requestRevision(clientWallet: string, projectId: number, revAmountXlm: number, sign: SignFn) {
+  const stroops = BigInt(Math.round(revAmountXlm * 10_000_000));
+  return invoke(clientWallet, 'request_revision', [
+    nativeToScVal(BigInt(projectId), { type: 'u64' }),
+    Address.fromString(clientWallet).toScVal(),
+    nativeToScVal(stroops, { type: 'i128' }),
+  ], sign);
+}
+
+export async function cancelMilestone(walletAddress: string, projectId: number, sign: SignFn) {
+  return invoke(walletAddress, 'cancel_milestone', [
+    nativeToScVal(BigInt(projectId), { type: 'u64' }),
+    Address.fromString(walletAddress).toScVal(),
+  ], sign);
+}
+
+export async function resolveDispute(
+  adminWallet: string,
+  milestoneId: number,
+  winnerWallet: string,
+  sign: SignFn,
+) {
+  return invoke(adminWallet, 'resolve_dispute', [
+    nativeToScVal(BigInt(milestoneId), { type: 'u64' }),
+    Address.fromString(adminWallet).toScVal(),
+    Address.fromString(winnerWallet).toScVal(),
   ], sign);
 }
 

@@ -1,17 +1,28 @@
 import { supabase } from './supabase';
 import type { MilestoneData, Project, UserRole } from './types';
 
-export async function getUserRole(wallet: string): Promise<UserRole | null> {
+export async function getUserProfile(wallet: string): Promise<{ role: UserRole | null; name: string | null } | null> {
   const { data } = await supabase
     .from('users')
-    .select('role')
+    .select('role, name')
     .eq('wallet', wallet)
     .single();
-  return (data?.role as UserRole) ?? null;
+  if (!data) return null;
+  return { role: (data.role as UserRole) ?? null, name: data.name ?? null };
+}
+
+export async function getUserRole(wallet: string): Promise<UserRole | null> {
+  const profile = await getUserProfile(wallet);
+  return profile?.role ?? null;
 }
 
 export async function saveUserRole(wallet: string, role: UserRole) {
   const { error } = await supabase.from('users').upsert({ wallet, role });
+  if (error) throw new Error(error.message);
+}
+
+export async function saveUserName(wallet: string, name: string) {
+  const { error } = await supabase.from('users').upsert({ wallet, name });
   if (error) throw new Error(error.message);
 }
 
@@ -33,6 +44,7 @@ export async function loadProjects(wallet: string, role: UserRole): Promise<Proj
     clientWallet: p.client_wallet,
     freelancerWallet: p.freelancer_wallet,
     deadline: p.deadline,
+    projectDeadline: p.project_deadline ?? null,
     tx: p.tx_hash ?? '',
     milestones: ((p.milestones ?? []) as any[])
       .sort((a, b) => a.id - b.id)
@@ -66,15 +78,16 @@ export async function createProject(
   freelancerWallet: string,
   deadline: number,
   milestones: { name: string; desc: string; amount: number }[],
-): Promise<number> {
+  projectDeadline?: string,
+): Promise<{ projectId: number; milestoneIds: number[] }> {
   const { data: proj, error: projErr } = await supabase
     .from('projects')
-    .insert({ name, client_wallet: clientWallet, freelancer_wallet: freelancerWallet, deadline })
+    .insert({ name, client_wallet: clientWallet, freelancer_wallet: freelancerWallet, deadline, project_deadline: projectDeadline || null })
     .select('id')
     .single();
   if (projErr || !proj) throw new Error(projErr?.message ?? 'Failed to create project');
 
-  const { error: msErr } = await supabase.from('milestones').insert(
+  const { data: msData, error: msErr } = await supabase.from('milestones').insert(
     milestones.map(m => ({
       project_id: proj.id,
       name: m.name,
@@ -82,10 +95,10 @@ export async function createProject(
       amount: m.amount,
       status: 'created',
     }))
-  );
+  ).select('id');
   if (msErr) throw new Error(msErr.message);
 
-  return proj.id;
+  return { projectId: proj.id, milestoneIds: (msData ?? []).map((m: { id: number }) => m.id) };
 }
 
 export async function updateProjectTx(projectId: number, txHash: string) {
@@ -101,15 +114,80 @@ export async function updateMsStatus(
     proof_file_url?: string;
     rev_fee?: number;
     rev_feedback?: string;
+    amount?: number;
   }
 ) {
   const { error } = await supabase.from('milestones').update(patch).eq('id', milestoneId);
   if (error) throw new Error(error.message);
 }
 
+export async function loadProjectMilestones(projectId: number): Promise<{ id: number; status: string; amount: number }[]> {
+  const { data } = await supabase
+    .from('milestones')
+    .select('id, status, amount')
+    .eq('project_id', projectId)
+    .order('id', { ascending: true });
+  return (data ?? []) as { id: number; status: string; amount: number }[];
+}
+
+export async function deleteProject(projectId: number) {
+  await supabase.from('timeline').delete().eq('project_id', projectId);
+  await supabase.from('milestones').delete().eq('project_id', projectId);
+  const { error } = await supabase.from('projects').delete().eq('id', projectId);
+  if (error) throw new Error(error.message);
+}
+
 export async function addTimeline(projectId: number, dot: 'done' | 'act', text: string) {
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   await supabase.from('timeline').insert({ project_id: projectId, dot, time, text });
+}
+
+export async function createDispute(
+  milestoneId: number,
+  projectId: number,
+  raisedBy: string,
+  raisedByRole: string,
+  reason: string,
+  fileLink?: string,
+  designLink?: string,
+  repoLink?: string,
+) {
+  const { error } = await supabase.from('disputes').insert({
+    milestone_id: milestoneId,
+    project_id: projectId,
+    raised_by: raisedBy,
+    raised_by_role: raisedByRole,
+    reason,
+    file_link: fileLink || null,
+    design_link: designLink || null,
+    repo_link: repoLink || null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function loadAdminDisputes() {
+  const { data, error } = await supabase
+    .from('disputes')
+    .select('*, milestones(*, projects(*))')
+    .is('resolution', null)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function resolveDisputeDb(
+  milestoneId: number,
+  resolution: 'freelancer' | 'client',
+  newStatus: 'released' | 'created',
+) {
+  const now = new Date().toISOString();
+  await supabase.from('disputes')
+    .update({ resolution, resolved_at: now })
+    .eq('milestone_id', milestoneId)
+    .is('resolution', null);
+  await supabase.from('milestones')
+    .update({ status: newStatus })
+    .eq('id', milestoneId);
 }
 
 export async function uploadProofFile(file: File, milestoneId: number): Promise<string> {
