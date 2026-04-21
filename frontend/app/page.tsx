@@ -5,7 +5,7 @@ import type { PageName, UserRole, MsStatus, BuildMs, MilestoneData, Project, Tim
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const DL_LABEL: Record<number, string> = {
-  172800: '48 hours', 86400: '24 hours', 259200: '72 hours',
+  10: '10 seconds (demo)', 172800: '48 hours', 86400: '24 hours', 259200: '72 hours',
 };
 const STATUS_ICON: Record<MsStatus, string> = {
   created: '📋', progress: '⚙️', review: '⏳', revision: '🔁', released: '✅', disputed: '⚠️',
@@ -55,7 +55,7 @@ export default function App() {
   // ── Create form ──
   const [formName, setFormName] = useState('');
   const [formFreelancerWallet, setFormFreelancerWallet] = useState('');
-  const [formDeadline, setFormDeadline] = useState(172800);
+  const [formDeadline, setFormDeadline] = useState(10);
   const [formProjectDeadline, setFormProjectDeadline] = useState('');
   const [buildList, setBuildList] = useState<BuildMs[]>(DEFAULT_BUILD);
 
@@ -329,7 +329,7 @@ export default function App() {
       setProjects(updated);
       setActiveProjectId(pid);
 
-      setFormName(''); setFormFreelancerWallet(''); setFormDeadline(172800); setFormProjectDeadline('');
+      setFormName(''); setFormFreelancerWallet(''); setFormDeadline(10); setFormProjectDeadline('');
       setBuildList([...DEFAULT_BUILD]); buildUID = 2;
 
       showToast(`<strong>${buildTotal} XLM locked</strong> — project created!`, '🔒');
@@ -960,6 +960,7 @@ export default function App() {
               <div className="fg" style={{ marginBottom: 0 }}>
                 <label className="fl">Release funds after freelancer submits milestone</label>
                 <select className="fi" value={formDeadline} onChange={e => setFormDeadline(Number(e.target.value))}>
+                  <option value={10}>10 seconds (demo)</option>
                   <option value={172800}>48 hours (recommended)</option>
                   <option value={86400}>24 hours</option>
                   <option value={259200}>72 hours</option>
